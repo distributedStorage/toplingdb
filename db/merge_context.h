@@ -30,7 +30,7 @@ class MergeContext {
     SetDirectionBackward();
 
     if (operand_pinned) {
-      operand_list_.push_back(operand_slice);
+      operand_list_.emplace_back(operand_slice);
     } else {
       // We need to have our own copy of the operand since it's not pinned
       char* copy = MakeCopy(operand_slice);
@@ -45,7 +45,7 @@ class MergeContext {
     SetDirectionForward();
 
     if (operand_pinned) {
-      operand_list_.push_back(operand_slice);
+      operand_list_.emplace_back(operand_slice);
     } else {
       // We need to have our own copy of the operand since it's not pinned
       char* copy = MakeCopy(operand_slice);
