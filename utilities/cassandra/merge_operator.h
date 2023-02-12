@@ -32,7 +32,7 @@ class CassandraValueMergeOperator : public MergeOperator {
 
   virtual bool AllowSingleOperand() const override { return true; }
 
-  virtual bool ShouldMerge(const std::vector<Slice>& operands) const override {
+  virtual bool ShouldMerge(const MergeOperandList& operands) const override {
     return options_.operands_limit > 0 &&
            operands.size() >= options_.operands_limit;
   }

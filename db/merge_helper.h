@@ -51,7 +51,7 @@ class MergeHelper {
   // - Corruption: Merge operator reported unsuccessful merge.
   static Status TimedFullMerge(const MergeOperator* merge_operator,
                                const Slice& key, const Slice* value,
-                               const std::vector<Slice>& operands,
+                               const MergeOperandList& operands,
                                std::string* result, Logger* logger,
                                Statistics* statistics, SystemClock* clock,
                                Slice* result_operand,
@@ -59,7 +59,7 @@ class MergeHelper {
 
   static Status TimedFullMergeWithEntity(
       const MergeOperator* merge_operator, const Slice& key, Slice base_entity,
-      const std::vector<Slice>& operands, std::string* result, Logger* logger,
+      const MergeOperandList& operands, std::string* result, Logger* logger,
       Statistics* statistics, SystemClock* clock, bool update_num_ops_stats);
 
   // During compaction, merge entries until we hit
@@ -136,7 +136,7 @@ class MergeHelper {
   //                So keys().back() was the first key seen by iterator.
   // TODO: Re-style this comment to be like the first one
   const std::deque<std::string>& keys() const { return keys_; }
-  const std::vector<Slice>& values() const {
+  const MergeOperandList& values() const {
     return merge_context_.GetOperands();
   }
   uint64_t TotalFilterTime() const { return total_filter_time_; }
@@ -210,7 +210,7 @@ class MergeOutputIterator {
  private:
   const MergeHelper* merge_helper_;
   std::deque<std::string>::const_reverse_iterator it_keys_;
-  std::vector<Slice>::const_reverse_iterator it_values_;
+  MergeOperandList::const_reverse_iterator it_values_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

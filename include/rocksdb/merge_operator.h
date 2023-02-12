@@ -18,6 +18,76 @@ namespace ROCKSDB_NAMESPACE {
 class Slice;
 class Logger;
 
+class MergeContext;
+class MergeOperand {
+  const char* data_;
+  uint32_t    size_;
+  bool        owns_;
+public:
+  MergeOperand(const std::string& src) noexcept
+    : data_(src.data()), size_(uint32_t(src.size())), owns_(false) {}
+  explicit MergeOperand(Slice src) noexcept
+    : data_(src.data_), size_(uint32_t(src.size_)), owns_(false) {}
+  MergeOperand(char* data, size_t len, bool) noexcept
+    : data_(data), size_(uint32_t(len)), owns_(true) {}
+  MergeOperand(const MergeOperand& y) noexcept
+    : data_(y.data_), size_(y.size_), owns_(false) {}
+  MergeOperand& operator=(const MergeOperand& y) noexcept {
+    assert(!this->owns_);
+    data_ = y.data_;
+    size_ = y.size_;
+    return *this;
+  }
+  ~MergeOperand() { if (owns_) delete [] (char*)data_; }
+  operator Slice() const noexcept { return Slice(data_, size_); }
+  const char* data() const noexcept { return data_; }
+  size_t size() const noexcept { return size_; }
+  void remove_suffix(size_t n) noexcept {
+    assert(n <= size());
+    size_ -= uint32_t(n);
+  }
+  std::string ToString() const { return std::string(data_, size_); }
+//private: // this `private` makes MergeOperand's type traits can't moveable
+//friend std::vector<MergeOperand>;
+  MergeOperand(MergeOperand&& y) noexcept
+    : data_(y.data_), size_(y.size_), owns_(y.owns_) {
+    y.owns_ = false;
+  }
+  MergeOperand& operator=(MergeOperand&& y) noexcept {
+    if (&y != this) {
+      if (this->owns_) {
+        delete [] (char*)data_;
+      }
+      data_ = y.data_;
+      size_ = y.size_;
+      owns_ = y.owns_;
+      y.owns_ = false;
+    }
+    return *this;
+  }
+  friend void swap(MergeOperand& x, MergeOperand& y) noexcept {
+    std::swap(x.data_, y.data_);
+    std::swap(x.size_, y.size_);
+    std::swap(x.owns_, y.owns_);
+  }
+};
+class MergeOperandList : public std::vector<MergeOperand> {
+  friend class MergeContext;
+  MergeOperandList(MergeOperandList&&) = default;
+  MergeOperandList& operator=(MergeOperandList&&) = default;
+  MergeOperandList(const MergeOperandList&) = delete;
+  MergeOperandList& operator=(const MergeOperandList&) = delete;
+  using super = std::vector<MergeOperand>;
+public:
+  using super::super;
+  MergeOperandList(std::initializer_list<Slice> il) {
+    this->reserve(il.size());
+    for (auto sl : il) this->emplace_back(sl);
+  }
+  using super::push_back;
+  void push_back(Slice s) { this->emplace_back(s); }
+};
+
 // The Merge Operator
 //
 // Essentially, a MergeOperator specifies the SEMANTICS of a merge, which only
@@ -85,7 +155,7 @@ class MergeOperator : public Customizable {
     // If user-defined timestamp is enabled, `_key` includes timestamp.
     explicit MergeOperationInput(const Slice& _key,
                                  const Slice* _existing_value,
-                                 const std::vector<Slice>& _operand_list,
+                                 const MergeOperandList& _operand_list,
                                  Logger* _logger)
         : key(_key),
           existing_value(_existing_value),
@@ -98,7 +168,7 @@ class MergeOperator : public Customizable {
     // value doesn't exist.
     const Slice* existing_value;
     // A list of operands to apply.
-    const std::vector<Slice>& operand_list;
+    const MergeOperandList& operand_list;
     // Logger could be used by client to log any errors that happen during
     // the merge operation.
     Logger* logger;
@@ -225,7 +295,7 @@ class MergeOperator : public Customizable {
   // relative to how they were merged (passed to FullMerge or FullMergeV2)
   // for performance reasons, see also:
   // https://github.com/facebook/rocksdb/issues/3865
-  virtual bool ShouldMerge(const std::vector<Slice>& /*operands*/) const {
+  virtual bool ShouldMerge(const MergeOperandList& /*operands*/) const {
     return false;
   }
 };

@@ -40,7 +40,7 @@ bool TtlMergeOperator::FullMergeV2(const MergeOperationInput& merge_in,
   }
 
   // Extract time-stamp from each operand to be passed to user_merge_op_
-  std::vector<Slice> operands_without_ts;
+  MergeOperandList operands_without_ts;
   for (const auto& operand : merge_in.operand_list) {
     if (operand.size() < ts_len) {
       ROCKS_LOG_ERROR(merge_in.logger,

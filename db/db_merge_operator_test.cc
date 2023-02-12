@@ -70,7 +70,7 @@ TEST_F(DBMergeOperatorTest, LimitMergeOperands) {
       return "DBMergeOperatorTest::LimitedStringAppendMergeOp";
     }
 
-    bool ShouldMerge(const std::vector<Slice>& operands) const override {
+    bool ShouldMerge(const MergeOperandList& operands) const override {
       if (operands.size() > 0 && limit_ > 0 && operands.size() >= limit_) {
         return true;
       }

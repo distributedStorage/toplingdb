@@ -31,7 +31,7 @@ class AggMergeOperator : public MergeOperator {
 
   bool AllowSingleOperand() const override { return true; }
 
-  bool ShouldMerge(const std::vector<Slice>&) const override { return false; }
+  bool ShouldMerge(const MergeOperandList&) const override { return false; }
 
  private:
   class Accumulator;

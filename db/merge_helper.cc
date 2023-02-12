@@ -58,7 +58,7 @@ MergeHelper::MergeHelper(Env* env, const Comparator* user_comparator,
 
 Status MergeHelper::TimedFullMerge(const MergeOperator* merge_operator,
                                    const Slice& key, const Slice* value,
-                                   const std::vector<Slice>& operands,
+                                   const MergeOperandList& operands,
                                    std::string* result, Logger* logger,
                                    Statistics* statistics, SystemClock* clock,
                                    Slice* result_operand,
@@ -114,7 +114,7 @@ Status MergeHelper::TimedFullMerge(const MergeOperator* merge_operator,
 
 Status MergeHelper::TimedFullMergeWithEntity(
     const MergeOperator* merge_operator, const Slice& key, Slice base_entity,
-    const std::vector<Slice>& operands, std::string* result, Logger* logger,
+    const MergeOperandList& operands, std::string* result, Logger* logger,
     Statistics* statistics, SystemClock* clock, bool update_num_ops_stats) {
   WideColumns base_columns;
 

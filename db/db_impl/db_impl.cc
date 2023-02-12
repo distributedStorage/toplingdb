@@ -2044,7 +2044,7 @@ bool DBImpl::ShouldReferenceSuperVersion(const MergeContext& merge_context) {
   static const size_t kLog2AvgBytesForSvRef = 8;  // 256 bytes
 
   size_t num_bytes = 0;
-  for (const Slice& sl : merge_context.GetOperands()) {
+  for (const auto& sl : merge_context.GetOperands()) {
     num_bytes += sl.size();
   }
   return num_bytes >= kNumBytesForSvRef &&
@@ -2332,7 +2332,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
               get_impl_options.merge_operands++;
             }
           } else {
-            for (const Slice& sl : merge_context.GetOperands()) {
+            for (const Slice sl : merge_context.GetOperands()) {
               size += sl.size();
               get_impl_options.merge_operands->PinSelf(sl);
               get_impl_options.merge_operands++;

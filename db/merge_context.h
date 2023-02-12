@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "rocksdb/slice.h"
+#include "rocksdb/merge_operator.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -22,7 +23,6 @@ class MergeContext {
   // Clear all the operands
   void Clear() {
     operand_list_.clear();
-    copied_operands_.clear();
   }
 
   // Push a merge operand
@@ -34,8 +34,7 @@ class MergeContext {
     } else {
       // We need to have our own copy of the operand since it's not pinned
       char* copy = MakeCopy(operand_slice);
-      copied_operands_.emplace_back(copy);
-      operand_list_.emplace_back(copy, operand_slice.size());
+      operand_list_.emplace_back(copy, operand_slice.size(), true);
     }
   }
 
@@ -49,8 +48,7 @@ class MergeContext {
     } else {
       // We need to have our own copy of the operand since it's not pinned
       char* copy = MakeCopy(operand_slice);
-      copied_operands_.emplace_back(copy);
-      operand_list_.emplace_back(copy, operand_slice.size());
+      operand_list_.emplace_back(copy, operand_slice.size(), true);
     }
   }
 
@@ -69,7 +67,7 @@ class MergeContext {
   // Note that the returned reference is only good until another call
   // to this MergeContext.  If the returned value is needed for longer,
   // a copy must be made.
-  const std::vector<Slice>& GetOperands() const {
+  const MergeOperandList& GetOperands() const {
     return GetOperandsDirectionForward();
   }
 
@@ -79,7 +77,7 @@ class MergeContext {
   // Note that the returned reference is only good until another call
   // to this MergeContext.  If the returned value is needed for longer,
   // a copy must be made.
-  const std::vector<Slice>& GetOperandsDirectionForward() const {
+  const MergeOperandList& GetOperandsDirectionForward() const {
     SetDirectionForward();
     return operand_list_;
   }
@@ -90,7 +88,7 @@ class MergeContext {
   // Note that the returned reference is only good until another call
   // to this MergeContext.  If the returned value is needed for longer,
   // a copy must be made.
-  const std::vector<Slice>& GetOperandsDirectionBackward() const {
+  const MergeOperandList& GetOperandsDirectionBackward() const {
     SetDirectionBackward();
     return operand_list_;
   }
@@ -117,9 +115,7 @@ class MergeContext {
   }
 
   // List of operands
-  mutable std::vector<Slice> operand_list_;
-  // Copy of operands that are not pinned.
-  std::vector<std::unique_ptr<char[]> > copied_operands_;
+  mutable MergeOperandList operand_list_;
   mutable bool operands_reversed_ = true;
 };
 

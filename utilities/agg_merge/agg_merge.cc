@@ -184,7 +184,7 @@ void AggMergeOperator::PackAllMergeOperands(const MergeOperationInput& merge_in,
   if (merge_in.existing_value != nullptr) {
     PutLengthPrefixedSlice(&merge_out.new_value, *merge_in.existing_value);
   }
-  for (const Slice& op : merge_in.operand_list) {
+  for (const Slice op : merge_in.operand_list) {
     PutLengthPrefixedSlice(&merge_out.new_value, op);
   }
 }
@@ -195,7 +195,7 @@ bool AggMergeOperator::FullMergeV2(const MergeOperationInput& merge_in,
   if (merge_in.existing_value != nullptr) {
     agg.Add(*merge_in.existing_value, /*is_partial_aggregation=*/false);
   }
-  for (const Slice& e : merge_in.operand_list) {
+  for (const Slice e : merge_in.operand_list) {
     agg.Add(e, /*is_partial_aggregation=*/false);
   }
 

@@ -20,7 +20,7 @@ class UtilMergeOperatorTest : public testing::Test {
     Slice result_operand(nullptr, 0);
 
     Slice existing_value_slice(existing_value);
-    std::vector<Slice> operands_slice(operands.begin(), operands.end());
+    MergeOperandList operands_slice(operands.begin(), operands.end());
 
     const MergeOperator::MergeOperationInput merge_in(
         key, &existing_value_slice, operands_slice, nullptr);
@@ -38,7 +38,7 @@ class UtilMergeOperatorTest : public testing::Test {
     std::string result;
     Slice result_operand(nullptr, 0);
 
-    std::vector<Slice> operands_slice(operands.begin(), operands.end());
+    MergeOperandList operands_slice(operands.begin(), operands.end());
 
     const MergeOperator::MergeOperationInput merge_in(key, nullptr,
                                                       operands_slice, nullptr);
