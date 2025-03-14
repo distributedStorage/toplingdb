@@ -966,9 +966,7 @@ Status WriteBatchInternal::PutEntity(WriteBatch* b, uint32_t column_family_id,
   PutLengthPrefixedSlice(&b->rep_, key);
   PutLengthPrefixedSlice(&b->rep_, entity);
 
-  b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
-                              ContentFlags::HAS_PUT_ENTITY,
-                          std::memory_order_relaxed);
+  b->content_flags_.fetch_or(HAS_PUT_ENTITY, std::memory_order_relaxed);
 
   if (b->prot_info_ != nullptr) {
     b->prot_info_->entries_.emplace_back(
@@ -1061,8 +1059,7 @@ Status WriteBatchInternal::MarkCommitWithTimestamp(WriteBatch* b,
   b->rep_.push_back(static_cast<char>(kTypeCommitXIDAndTimestamp));
   PutLengthPrefixedSlice(&b->rep_, commit_ts);
   PutLengthPrefixedSlice(&b->rep_, xid);
-  b->content_flags_.store(b->content_flags_.load(std::memory_order_relaxed) |
-                              ContentFlags::HAS_COMMIT,
+  b->content_flags_.fetch_or(ContentFlags::HAS_COMMIT,
                           std::memory_order_relaxed);
   return Status::OK();
 }
@@ -1777,7 +1774,7 @@ class MemTableInserter : public WriteBatch::Handler {
   bool hint_per_batch_;
   bool hint_created_;
   // Hints for this batch
-  using HintMap = std::unordered_map<MemTable*, void*>;
+  using HintMap = std::map<MemTable*, void*>;
   using HintMapType = std::aligned_storage<sizeof(HintMap)>::type;
   HintMapType hint_;
 
@@ -1891,7 +1888,11 @@ class MemTableInserter : public WriteBatch::Handler {
     }
     if (hint_created_) {
       for (auto iter : GetHintMap()) {
-        delete[] reinterpret_cast<char*>(iter.second);
+        // in ToplingDB CSPP PatriciaTrie, (iter.second & 1) indicate the hint
+        // is the thread local token, it does not need to be deleted
+        if ((reinterpret_cast<size_t>(iter.second) & 1) == 0) {
+          delete[] reinterpret_cast<char*>(iter.second);
+        }
       }
       reinterpret_cast<HintMap*>(&hint_)->~HintMap();
     }

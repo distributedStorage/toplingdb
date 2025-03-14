@@ -57,10 +57,18 @@ class MaxHeapItemComparator {
     }
   #endif
 #endif
+// if true, it should be a little faster
+static constexpr bool allow_read_beyond_key_mem = false;
 FORCE_INLINE UintPrefix HostPrefixCacheUK(const Slice& uk) {
   UintPrefix data;
   if (LIKELY(uk.size_ >= sizeof(UintPrefix))) {
     memcpy(&data, uk.data_, sizeof(UintPrefix));
+  } else if (allow_read_beyond_key_mem) {
+    memcpy(&data, uk.data_, sizeof(UintPrefix)); // read beyound uk mem
+    if (port::kLittleEndian) {
+      data = bswap_prefix(data);
+    }
+    return data & (UintPrefix(-1) << ((sizeof(UintPrefix) - uk.size_) * 8));
   } else {
     data = 0;
     memcpy(&data, uk.data_, uk.size_);
@@ -74,6 +82,12 @@ FORCE_INLINE UintPrefix HostPrefixCacheIK(const Slice& ik) {
   UintPrefix data;
   if (LIKELY(ik.size_ >= sizeof(UintPrefix) + 8)) {
     memcpy(&data, ik.data_, sizeof(UintPrefix));
+  } else if (allow_read_beyond_key_mem) {
+    memcpy(&data, ik.data_, sizeof(UintPrefix)); // read beyound user key mem
+    if (port::kLittleEndian) {
+      data = bswap_prefix(data);
+    }
+    return data & (UintPrefix(-1) << ((sizeof(UintPrefix) + 8 - ik.size_) * 8));
   } else {
     data = 0;
     memcpy(&data, ik.data_, ik.size_ - 8);
@@ -626,8 +640,7 @@ public:
     // current top of the heap.
     assert(current_ == CurrentForward());
     // as the current points to the current record. move the iterator forward.
-    current_->Next();
-    if (LIKELY(current_->Valid())) {
+    if (LIKELY(current_->Next())) {
       // current is still valid after the Next() call above.  Call
       // replace_top() to restore the heap property.  When the same child
       // iterator yields a sequence of keys, this is cheap.
@@ -646,7 +659,8 @@ public:
   bool NextAndGetResult(IterateResult* result) override {
     Next();
     bool is_valid = Valid();
-    if (is_valid) {
+    result->is_valid = is_valid;
+    if (LIKELY(is_valid)) {
       result->SetKey(this->key());
       result->bound_check_result = UpperBoundCheckResult();
       result->value_prepared = current_->IsValuePrepared();
@@ -702,6 +716,16 @@ public:
       return true;
     }
 
+    considerStatus(current_->status());
+    assert(!status_.ok());
+    return false;
+  }
+
+  bool PrepareAndGetValue(Slice* v) override {
+    assert(Valid());
+    if (LIKELY(current_->PrepareAndGetValue(v))) {
+      return true;
+    }
     considerStatus(current_->status());
     assert(!status_.ok());
     return false;
@@ -1059,8 +1083,7 @@ MergingIterMethod(bool)SkipNextDeleted() {
       active_.erase(current->level);
     }
     // LevelIterator enters a new SST file
-    current->iter.Next();
-    if (current->iter.Valid()) {
+    if (current->iter.Next()) {
       assert(current->iter.status().ok());
       UpdatePrefixCache(current);
       minHeap_.push(current);
@@ -1096,8 +1119,7 @@ MergingIterMethod(bool)SkipNextDeleted() {
              0);
       if (pik.sequence < range_tombstone_iters_[current->level]->seq()) {
         // covered by range tombstone
-        current->iter.Next();
-        if (current->iter.Valid()) {
+        if (current->iter.Next()) {
           UpdatePrefixCache(current);
           minHeap_.replace_top(current);
         } else {

@@ -35,6 +35,7 @@ BaseDeltaIterator::BaseDeltaIterator(ColumnFamilyHandle* column_family,
                                         : nullptr) {
   assert(comparator_);
   wbwii_.reset(new WriteBatchWithIndexInternal(column_family));
+  delta_valid_ = false;
   opt_cmp_type_ = comparator->opt_cmp_type();
 }
 
@@ -47,35 +48,43 @@ void BaseDeltaIterator::SeekToFirst() {
   forward_ = true;
   base_iterator_->SeekToFirst();
   delta_iterator_->SeekToFirst();
-  UpdateCurrent();
+  delta_valid_ = delta_iterator_->Valid();
+  UpdateCurrent(true);
 }
 
 void BaseDeltaIterator::SeekToLast() {
   forward_ = false;
   base_iterator_->SeekToLast();
   delta_iterator_->SeekToLast();
-  UpdateCurrent();
+  delta_valid_ = delta_iterator_->Valid();
+  UpdateCurrent(false);
 }
 
 void BaseDeltaIterator::Seek(const Slice& k) {
   forward_ = true;
   base_iterator_->Seek(k);
   delta_iterator_->Seek(k);
-  UpdateCurrent();
+  delta_valid_ = delta_iterator_->Valid();
+  UpdateCurrent(true);
 }
 
 void BaseDeltaIterator::SeekForPrev(const Slice& k) {
   forward_ = false;
   base_iterator_->SeekForPrev(k);
   delta_iterator_->SeekForPrev(k);
-  UpdateCurrent();
+  delta_valid_ = delta_iterator_->Valid();
+  UpdateCurrent(false);
 }
 
 void BaseDeltaIterator::Next() {
+#if 0
   if (UNLIKELY(!Valid())) {
     status_ = Status::NotSupported("Next() on invalid iterator");
     return;
   }
+#else
+  assert(Valid());
+#endif
 
   if (UNLIKELY(!forward_)) {
     // Need to change direction
@@ -90,29 +99,34 @@ void BaseDeltaIterator::Next() {
       base_iterator_->SeekToFirst();
     } else if (!DeltaValid()) {
       delta_iterator_->SeekToFirst();
+      delta_valid_ = delta_iterator_->Valid();
     } else if (current_at_base_) {
       // Change delta from larger than base to smaller
-      AdvanceDelta();
+      AdvanceDelta(true);
     } else {
       // Change base from larger than delta to smaller
-      AdvanceBase();
+      AdvanceBase(true);
     }
     if (DeltaValid() && BaseValid()) {
       if (0 == comparator_->CompareWithoutTimestamp(
-                   delta_iterator_->Entry().key, /*a_has_ts=*/false,
+                   delta_iterator_->user_key(), /*a_has_ts=*/false,
                    base_iterator_->key(), /*b_has_ts=*/false)) {
         equal_keys_ = true;
       }
     }
   }
-  Advance();
+  Advance(true);
 }
 
 void BaseDeltaIterator::Prev() {
+#if 0
   if (UNLIKELY(!Valid())) {
     status_ = Status::NotSupported("Prev() on invalid iterator");
     return;
   }
+#else
+  assert(Valid());
+#endif
 
   if (UNLIKELY(forward_)) {
     // Need to change direction
@@ -127,28 +141,29 @@ void BaseDeltaIterator::Prev() {
       base_iterator_->SeekToLast();
     } else if (!DeltaValid()) {
       delta_iterator_->SeekToLast();
+      delta_valid_ = delta_iterator_->Valid();
     } else if (current_at_base_) {
       // Change delta from less advanced than base to more advanced
-      AdvanceDelta();
+      AdvanceDelta(false);
     } else {
       // Change base from less advanced than delta to more advanced
-      AdvanceBase();
+      AdvanceBase(false);
     }
     if (DeltaValid() && BaseValid()) {
       if (0 == comparator_->CompareWithoutTimestamp(
-                   delta_iterator_->Entry().key, /*a_has_ts=*/false,
+                   delta_iterator_->user_key(), /*a_has_ts=*/false,
                    base_iterator_->key(), /*b_has_ts=*/false)) {
         equal_keys_ = true;
       }
     }
   }
 
-  Advance();
+  Advance(false);
 }
 
 Slice BaseDeltaIterator::key() const {
   return current_at_base_ ? base_iterator_->key()
-                          : delta_iterator_->Entry().key;
+                          : delta_iterator_->user_key();
 }
 
 Slice BaseDeltaIterator::value() const {
@@ -180,6 +195,14 @@ Slice BaseDeltaIterator::value() const {
   }
 }
 
+bool BaseDeltaIterator::PrepareValue() {
+  if (current_at_base_) {
+    return base_iterator_->PrepareValue();
+  } else {
+    return true;
+  }
+}
+
 Status BaseDeltaIterator::status() const {
   if (!status_.ok()) {
     return status_;
@@ -204,6 +227,7 @@ void BaseDeltaIterator::AssertInvariants() {
     not_ok = true;
   }
   if (!delta_iterator_->status().ok()) {
+    assert(!delta_valid_);
     assert(!delta_iterator_->Valid());
     not_ok = true;
   }
@@ -246,40 +270,63 @@ void BaseDeltaIterator::AssertInvariants() {
 #endif
 }
 
-void BaseDeltaIterator::Advance() {
-  if (equal_keys_) {
+ROCKSDB_FLATTEN
+void BaseDeltaIterator::Advance(bool const_forward) {
+  if (UNLIKELY(equal_keys_)) {
     assert(BaseValid() && DeltaValid());
-    AdvanceBase();
-    AdvanceDelta();
+    AdvanceBase(const_forward);
+    AdvanceDelta(const_forward);
   } else {
-    if (current_at_base_) {
+    if (LIKELY(current_at_base_)) {
       assert(BaseValid());
-      AdvanceBase();
+      AdvanceBase(const_forward);
     } else {
       assert(DeltaValid());
-      AdvanceDelta();
+      AdvanceDelta(const_forward);
     }
   }
-  UpdateCurrent();
+  UpdateCurrent(const_forward);
 }
 
-void BaseDeltaIterator::AdvanceDelta() {
-  if (forward_) {
-    delta_iterator_->NextKey();
+inline static bool AdvanceIter(WBWIIterator* i, bool forward) {
+  if (forward) {
+    return i->NextKey();
   } else {
-    delta_iterator_->PrevKey();
+    return i->PrevKey();
   }
 }
-void BaseDeltaIterator::AdvanceBase() {
-  if (forward_) {
+inline static void AdvanceIter(Iterator* i, bool forward) {
+  if (forward) {
+    i->Next();
+  } else {
+    i->Prev();
+  }
+}
+
+inline void BaseDeltaIterator::AdvanceDelta(bool const_forward) {
+  assert(const_forward == forward_);
+  if (const_forward) {
+    delta_valid_ = delta_iterator_->NextKey();
+  } else {
+    delta_valid_ = delta_iterator_->PrevKey();
+  }
+}
+inline void BaseDeltaIterator::AdvanceBase(bool const_forward) {
+  assert(const_forward == forward_);
+  if (const_forward) {
     base_iterator_->Next();
   } else {
     base_iterator_->Prev();
   }
 }
 
-bool BaseDeltaIterator::BaseValid() const { return base_iterator_->Valid(); }
-bool BaseDeltaIterator::DeltaValid() const { return delta_iterator_->Valid(); }
+inline bool BaseDeltaIterator::BaseValid() const {
+  return base_iterator_->Valid();
+}
+inline bool BaseDeltaIterator::DeltaValid() const {
+  assert(delta_iterator_->Valid() == delta_valid_);
+  return delta_valid_;
+}
 
 struct BDI_BytewiseCmpNoTS {
   int compare(const Slice& x, const Slice& y) const { return x.compare(y); }
@@ -295,37 +342,31 @@ struct BDI_VirtualCmpNoTS {
 };
 
 ROCKSDB_FLATTEN
-void BaseDeltaIterator::UpdateCurrent() {
+void BaseDeltaIterator::UpdateCurrent(bool const_forward) {
   if (0 == opt_cmp_type_)
-    UpdateCurrentTpl(BDI_BytewiseCmpNoTS());
+    UpdateCurrentTpl(const_forward, BDI_BytewiseCmpNoTS());
   else if (1 == opt_cmp_type_)
-    UpdateCurrentTpl(BDI_RevBytewiseCmpNoTS());
+    UpdateCurrentTpl(const_forward, BDI_RevBytewiseCmpNoTS());
   else
-    UpdateCurrentTpl(BDI_VirtualCmpNoTS{comparator_});
+    UpdateCurrentTpl(const_forward, BDI_VirtualCmpNoTS{comparator_});
 }
 template<class CmpNoTS>
-void BaseDeltaIterator::UpdateCurrentTpl(CmpNoTS cmp) {
+void BaseDeltaIterator::UpdateCurrentTpl(bool const_forward, CmpNoTS cmp) {
 // Suppress false positive clang analyzer warnings.
 #ifndef __clang_analyzer__
   status_.SetAsOK();
   Iterator* base_iterator_ = this->base_iterator_.get();
   WBWIIterator* delta_iterator_ = this->delta_iterator_.get();
   while (true) {
-    auto delta_result = WBWIIteratorImpl::kNotFound;
-    WriteEntry delta_entry;
-    const bool delta_valid = delta_iterator_->Valid();
-    if (delta_valid) {
+    if (LIKELY(delta_valid_)) {
       assert(delta_iterator_->status().ok());
-      delta_result =
-          delta_iterator_->FindLatestUpdate(wbwii_->GetMergeContext());
-      delta_entry = delta_iterator_->Entry();
     } else if (!delta_iterator_->status().ok()) {
       // Expose the error status and stop.
       current_at_base_ = false;
       return;
     }
     equal_keys_ = false;
-    if (!base_iterator_->Valid()) {
+    if (UNLIKELY(!base_iterator_->Valid())) {
       if (!base_iterator_->status().ok()) {
         // Expose the error status and stop.
         current_at_base_ = true;
@@ -333,45 +374,51 @@ void BaseDeltaIterator::UpdateCurrentTpl(CmpNoTS cmp) {
       }
 
       // Base has finished.
-      if (!delta_valid) {
+      if (!delta_valid_) {
         // Finished
         return;
       }
       if (iterate_upper_bound_) {
-        if (cmp.compare(delta_entry.key, *iterate_upper_bound_) >= 0) {
+        Slice delta_key = delta_iterator_->user_key();
+        if (cmp.compare(delta_key, *iterate_upper_bound_) >= 0) {
           // out of upper bound -> finished.
           return;
         }
       }
+      const auto delta_result =
+          delta_iterator_->FindLatestUpdate(wbwii_->GetMergeContext());
       if (delta_result == WBWIIteratorImpl::kDeleted &&
           wbwii_->GetNumOperands() == 0) {
-        AdvanceDelta();
+        delta_valid_ = AdvanceIter(delta_iterator_, const_forward);
       } else {
         current_at_base_ = false;
         return;
       }
-    } else if (!delta_valid) {
+    } else if (UNLIKELY(!delta_valid_)) {
       // Delta has finished.
       current_at_base_ = true;
       return;
     } else {
-      int compare = forward_
-                  ? cmp.compare(delta_entry.key, base_iterator_->key())
-                  : cmp.compare(base_iterator_->key(), delta_entry.key)
+      Slice delta_key = delta_iterator_->user_key();
+      int compare = const_forward
+                  ? cmp.compare(delta_key, base_iterator_->key())
+                  : cmp.compare(base_iterator_->key(), delta_key)
                   ;
-      if (compare <= 0) {  // delta bigger or equal
+      if (UNLIKELY(compare <= 0)) {  // delta is less or equal
         if (compare == 0) {
           equal_keys_ = true;
         }
+        const auto delta_result =
+            delta_iterator_->FindLatestUpdate(wbwii_->GetMergeContext());
         if (delta_result != WBWIIteratorImpl::kDeleted ||
             wbwii_->GetNumOperands() > 0) {
           current_at_base_ = false;
           return;
         }
         // Delta is less advanced and is delete.
-        AdvanceDelta();
+        delta_valid_ = AdvanceIter(delta_iterator_, const_forward);
         if (equal_keys_) {
-          AdvanceBase();
+          AdvanceIter(base_iterator_, const_forward);
         }
       } else {
         current_at_base_ = true;
@@ -386,7 +433,7 @@ void BaseDeltaIterator::UpdateCurrentTpl(CmpNoTS cmp) {
 
 void WBWIIteratorImpl::AdvanceKey(bool forward) {
   if (Valid()) {
-    Slice key = Entry().key;
+    Slice key = user_key();
     do {
       if (forward) {
         Next();
@@ -397,9 +444,9 @@ void WBWIIteratorImpl::AdvanceKey(bool forward) {
   }
 }
 
-void WBWIIteratorImpl::NextKey() { AdvanceKey(true); }
+bool WBWIIteratorImpl::NextKey() { AdvanceKey(true); return Valid(); }
 
-void WBWIIteratorImpl::PrevKey() {
+bool WBWIIteratorImpl::PrevKey() {
   AdvanceKey(false);  // Move to the tail of the previous key
   if (Valid()) {
     AdvanceKey(false);  // Move back another key.  Now we are at the start of
@@ -410,12 +457,13 @@ void WBWIIteratorImpl::PrevKey() {
       SeekToFirst();  // Not valid, move to the start
     }
   }
+  return Valid();
 }
 
 WBWIIteratorImpl::Result WBWIIterator::FindLatestUpdate(
     MergeContext* merge_context) {
   if (Valid()) {
-    Slice key = Entry().key;
+    Slice key = user_key();
     return FindLatestUpdate(key, merge_context);
   } else {
     merge_context->Clear();  // Clear any entries in the MergeContext
@@ -424,7 +472,7 @@ WBWIIteratorImpl::Result WBWIIterator::FindLatestUpdate(
 }
 
 bool WBWIIteratorImpl::EqualsKey(const Slice& key) const {
-  return comparator_->CompareKey(column_family_id_, Entry().key, key) == 0;
+  return comparator_->CompareKey(column_family_id_, user_key(), key) == 0;
 }
 
 WBWIIteratorImpl::Result WBWIIterator::FindLatestUpdate(
@@ -659,9 +707,13 @@ WriteEntry WBWIIteratorImpl::Entry() const {
   return ret;
 }
 
+Slice WBWIIteratorImpl::user_key() const {
+  return Entry().key;
+}
+
 bool WBWIIteratorImpl::MatchesKey(uint32_t cf_id, const Slice& key) {
   if (Valid()) {
-    return comparator_->CompareKey(cf_id, key, Entry().key) == 0;
+    return comparator_->CompareKey(cf_id, key, user_key()) == 0;
   } else {
     return false;
   }

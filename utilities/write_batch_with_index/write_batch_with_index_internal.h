@@ -55,22 +55,24 @@ class BaseDeltaIterator final : public Iterator {
   Status Refresh(const Snapshot*, bool keep_iter_pos) override;
   using Iterator::Refresh;
   void Invalidate(Status s);
+  bool PrepareValue() override;
 
  private:
   void AssertInvariants();
-  void Advance();
-  void AdvanceDelta();
-  void AdvanceBase();
+  void Advance(bool const_forward);
+  void AdvanceDelta(bool const_forward);
+  void AdvanceBase(bool const_forward);
   bool BaseValid() const;
   bool DeltaValid() const;
-  void UpdateCurrent();
+  void UpdateCurrent(bool const_forward);
   template<class CmpNoTS>
-  void UpdateCurrentTpl(CmpNoTS);
+  void UpdateCurrentTpl(bool const_forward, CmpNoTS);
 
   std::unique_ptr<WriteBatchWithIndexInternal> wbwii_;
   bool forward_;
   bool current_at_base_;
   bool equal_keys_;
+  bool delta_valid_;
   unsigned char opt_cmp_type_;
   mutable Status status_;
   std::unique_ptr<Iterator> base_iterator_;
@@ -203,7 +205,7 @@ class WBWIIteratorImpl : public WBWIIterator {
 
   ~WBWIIteratorImpl() override {}
 
-  bool Valid() const override {
+  bool Valid() const final {
     if (!skip_list_iter_.Valid()) {
       return false;
     }
@@ -251,6 +253,8 @@ class WBWIIteratorImpl : public WBWIIterator {
 
   WriteEntry Entry() const override;
 
+  Slice user_key() const override;
+
   Status status() const override {
     // this is in-memory data structure, so the only way status can be non-ok is
     // through memory corruption
@@ -264,9 +268,9 @@ class WBWIIteratorImpl : public WBWIIterator {
   bool MatchesKey(uint32_t cf_id, const Slice& key);
 
   // Moves the iterator to first entry of the previous key.
-  void PrevKey() final;
+  bool PrevKey() final;
   // Moves the iterator to first entry of the next key.
-  void NextKey() final;
+  bool NextKey() final;
 
  protected:
   void AdvanceKey(bool forward);

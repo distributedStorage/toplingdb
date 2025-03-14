@@ -90,6 +90,11 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+__attribute__((weak)) void
+InitUdfa(LevelFilesBrief*, const Comparator* user_cmp);
+__attribute__((weak)) int
+FindFileInRangeUdfa(const LevelFilesBrief&, const Slice& key);
+
 namespace {
 
 #if defined(_MSC_VER) /* Visual Studio */
@@ -205,11 +210,29 @@ int FindFileInRange(const InternalKeyComparator& icmp,
 #else // ToplingDB Devirtualization and Key Prefix Cache optimization
   if (icmp.IsForwardBytewise()) {
     ROCKSDB_ASSERT_EQ(icmp.user_comparator()->timestamp_size(), 0);
+  #ifdef TOPLINGDB_WITH_SST_UNION_DFA
+    if (file_level.udfa) {
+      if (UNLIKELY(key.empty())) {
+        return int(left);
+      }
+      assert(&FindFileInRangeUdfa != nullptr);
+      return FindFileInRangeUdfa(file_level, key);
+    }
+  #endif
     BytewiseCompareInternalKey cmp;
     return (int)FindFileInRangeTmpl(cmp, file_level, key, left, right);
   }
   else if (icmp.IsReverseBytewise()) {
     ROCKSDB_ASSERT_EQ(icmp.user_comparator()->timestamp_size(), 0);
+  #ifdef TOPLINGDB_WITH_SST_UNION_DFA
+    if (file_level.udfa) {
+      if (UNLIKELY(key.empty())) {
+        return int(right);
+      }
+      assert(&FindFileInRangeUdfa != nullptr);
+      return FindFileInRangeUdfa(file_level, key);
+    }
+  #endif
     RevBytewiseCompareInternalKey cmp;
     return (int)FindFileInRangeTmpl(cmp, file_level, key, left, right);
   }
@@ -1185,6 +1208,9 @@ class LevelIterator final : public InternalIterator {
   }
 
   bool PrepareValue() override { return file_iter_.PrepareValue(); }
+  bool PrepareAndGetValue(Slice* v) override {
+    return file_iter_.PrepareAndGetValue(v);
+  }
 
   inline bool MayBeOutOfLowerBound() override {
     assert(Valid());
@@ -1254,7 +1280,7 @@ class LevelIterator final : public InternalIterator {
   // into the new file. Old range tombstone iterator is cleared.
   InternalIterator* NewFileIterator() {
     assert(file_index_ < flevel_->num_files);
-    auto file_meta = flevel_->files[file_index_];
+    const auto& file_meta = flevel_->files[file_index_];
     if (should_sample_) {
       sample_file_read_inc(file_meta.file_metadata);
     }
@@ -1597,6 +1623,7 @@ bool LevelIterator::NextAndGetResult(IterateResult* result) {
   assert(Valid());
   // file_iter_ is at EOF already when to_return_sentinel_
   bool is_valid = !to_return_sentinel_ && file_iter_.NextAndGetResult(result);
+  result->is_valid = is_valid;
   if (UNLIKELY(!is_valid)) {
     if (to_return_sentinel_) {
       ClearSentinel();
@@ -1607,6 +1634,7 @@ bool LevelIterator::NextAndGetResult(IterateResult* result) {
     SkipEmptyFileForward();
     is_next_read_sequential_ = false;
     is_valid = Valid();
+    result->is_valid = is_valid;
     if (is_valid) {
       // This could be set in TrySetDeleteRangeSentinel() or
       // SkipEmptyFileForward() above.
@@ -3162,6 +3190,8 @@ void VersionStorageInfo::GenerateLevelFilesBrief() {
   for (int level = 0; level < num_non_empty_levels_; level++) {
     DoGenerateLevelFilesBrief(&level_files_brief_[level], files_[level],
                               &arena_);
+    if (InitUdfa)
+      InitUdfa(&level_files_brief_[level], user_comparator_);
   }
 }
 

@@ -141,6 +141,7 @@ bool DBIter::ParseKey(ParsedInternalKey* ikey) {
 #endif
 }
 
+ROCKSDB_FLATTEN
 void DBIter::Next() {
   assert(valid_);
   assert(status_.ok());
@@ -158,6 +159,8 @@ void DBIter::Next() {
     is_key_seqnum_zero_ = false;
     if (!ReverseToForward()) {
       ok = false;
+    } else {
+      ok = iter_.Valid();
     }
   } else if (!current_entry_is_merged_) {
     // If the current value is not a merge, the iter position is the
@@ -166,12 +169,14 @@ void DBIter::Next() {
     // If the current key is a merge, very likely iter already points
     // to the next internal position.
     assert(iter_.Valid());
-    iter_.Next();
+    ok = iter_.Next();
     PERF_COUNTER_ADD(internal_key_skipped_count, 1);
+  } else {
+    ok = iter_.Valid();
   }
 
   local_stats_.next_count_++;
-  if (ok && iter_.Valid()) {
+  if (ok) {
     ClearSavedValue();
 
     if (prefix_same_as_start_) {
@@ -319,7 +324,6 @@ bool DBIter::FindNextUserEntryInternal(bool skipping_saved_key,
 }
 
 template<class CmpNoTS>
-ROCKSDB_FLATTEN
 bool DBIter::FindNextUserEntryInternalTmpl(bool skipping_saved_key,
                                            const Slice* prefix,
                                            CmpNoTS cmpNoTS) {
@@ -513,7 +517,7 @@ bool DBIter::FindNextUserEntryInternalTmpl(bool skipping_saved_key,
       } else {
         saved_key_.SetUserKey(
             ikey_.user_key,
-            !iter_.iter()->IsKeyPinned() || !pin_thru_lifetime_ /* copy */);
+            !pin_thru_lifetime_ || !iter_.iter()->IsKeyPinned() /* copy */);
         skipping_saved_key = false;
         num_skipped = 0;
         reseek_done = false;
@@ -572,7 +576,7 @@ bool DBIter::FindNextUserEntryInternalTmpl(bool skipping_saved_key,
       iter_.Seek(last_key);
       RecordTick(statistics_, NUMBER_OF_RESEEKS_IN_ITERATION);
     } else {
-      iter_.Next();
+      if (iter_.Next()) continue; else break; // omit iter_.Valid()
     }
   } while (iter_.Valid());
 
@@ -827,7 +831,7 @@ void DBIter::PrevInternal(const Slice* prefix) {
   while (iter_.Valid()) {
     saved_key_.SetUserKey(
         ExtractUserKey(iter_.key()),
-        !iter_.iter()->IsKeyPinned() || !pin_thru_lifetime_ /* copy */);
+        !pin_thru_lifetime_ || !iter_.iter()->IsKeyPinned() /* copy */);
 
     assert(prefix == nullptr || prefix_extractor_ != nullptr);
     if (prefix != nullptr &&
@@ -1523,6 +1527,7 @@ void DBIter::SetSavedKeyToSeekForPrevTarget(const Slice& target) {
   }
 }
 
+ROCKSDB_FLATTEN
 void DBIter::Seek(const Slice& target) {
   PERF_CPU_TIMER_GUARD(iter_seek_cpu_nanos, clock_);
   StopWatch sw(clock_, statistics_, DB_SEEK);
@@ -1700,7 +1705,7 @@ void DBIter::SeekToFirst() {
   if (iter_.Valid()) {
     saved_key_.SetUserKey(
         ExtractUserKey(iter_.key()),
-        !iter_.iter()->IsKeyPinned() || !pin_thru_lifetime_ /* copy */);
+        !pin_thru_lifetime_ || !iter_.iter()->IsKeyPinned() /* copy */);
     FindNextUserEntry(false /* not skipping saved_key */,
                       nullptr /* no prefix check */);
     if (statistics_ != nullptr) {

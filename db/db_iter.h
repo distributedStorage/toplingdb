@@ -158,20 +158,41 @@ class DBIter final : public Iterator {
       return Slice(ukey_and_ts.data(), ukey_and_ts.size() - timestamp_size_);
     }
   }
+
   Slice value() const override {
     assert(valid_);
-#if defined(TOPLINGDB_WITH_WIDE_COLUMNS)
+  #if defined(TOPLINGDB_WITH_WIDE_COLUMNS)
     assert(is_value_prepared_);
-#endif
-
+  #endif
     if (!is_value_prepared_) {
       auto mut = const_cast<DBIter*>(this);
-      ROCKSDB_VERIFY(mut->iter_.PrepareValue());
-      mut->is_value_prepared_ = true;
-      mut->value_ = iter_.value();
-      mut->local_stats_.bytes_read_ += value_.size_;
+      if (LIKELY(mut->iter_.PrepareAndGetValue(&mut->value_))) {
+        mut->is_value_prepared_ = true;
+        mut->local_stats_.bytes_read_ += value_.size_;
+      } else { // Can not go on, die with message
+        ROCKSDB_DIE("PrepareAndGetValue() failed, status = %s",
+                    iter_.status().ToString().c_str());
+      }
     }
     return value_;
+  }
+
+  // without PrepareValue, user can not check iter_.PrepareAndGetValue(),
+  // thus must die in DBIter::value() if iter_.PrepareAndGetValue() fails.
+  bool PrepareValue() override { // enable error check for lazy load
+    assert(valid_);
+    if (!is_value_prepared_) {
+      if (LIKELY(iter_.PrepareAndGetValue(&value_))) {
+        is_value_prepared_ = true;
+        local_stats_.bytes_read_ += value_.size_;
+      } else {
+        valid_ = false;
+        status_ = iter_.status();
+        ROCKSDB_VERIFY(!status_.ok());
+        return false;
+      }
+    }
+    return true;
   }
 
 #if defined(TOPLINGDB_WITH_WIDE_COLUMNS)
@@ -364,7 +385,7 @@ class DBIter final : public Iterator {
   Logger* logger_;
   UserComparatorWrapper user_comparator_;
   const MergeOperator* const merge_operator_;
-  ThinIteratorWrapper iter_;
+  IteratorWrapper iter_;
   const Version* version_;
   ReadCallback* read_callback_;
   // Max visible sequence number. It is normally the snapshot seq unless we have
